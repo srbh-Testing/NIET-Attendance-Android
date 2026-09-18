@@ -714,6 +714,28 @@ class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     fun PlannerScreen(data: List<AttendanceSubject>, onBack: () -> Unit) {
+        val overallPresent = data.sumOf { it.attendedLecture?.toIntOrNull() ?: 0 }
+        val overallHeldSoFar = data.sumOf { it.totalWithOutMakeupLectureCount?.toIntOrNull() ?: 0 }
+        val defaultTotal = data.sumOf { it.totalNoOFSession?.toIntOrNull() ?: 0 }.takeIf { it > 0 }
+
+        var totalText by remember {
+            mutableStateOf((semesterTotalsStore.getOverallTotal() ?: defaultTotal)?.toString() ?: "")
+        }
+        var committedTotal by remember {
+            mutableStateOf(semesterTotalsStore.getOverallTotal() ?: defaultTotal)
+        }
+        var targetText by remember {
+            mutableStateOf(
+                semesterTotalsStore.getTarget().let {
+                    if (it == it.toLong().toDouble()) it.toLong().toString() else it.toString()
+                }
+            )
+        }
+
+        val target = targetText.toDoubleOrNull() ?: 75.0
+        val result = committedTotal?.let { computePlanner(overallPresent, overallHeldSoFar, it, target) }
+        val usingDefault = semesterTotalsStore.getOverallTotal() == null && defaultTotal != null
+
         Scaffold(
             topBar = {
                 TopAppBar(
@@ -726,94 +748,109 @@ class MainActivity : ComponentActivity() {
                 )
             }
         ) { padding ->
-            LazyColumn(
+            Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
-                    .padding(horizontal = 16.dp),
-                contentPadding = PaddingValues(vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                    .padding(16.dp)
             ) {
-                items(data) { subject ->
-                    val code = subject.subjectCode
-                    if (code == null) return@items
-                    val present = subject.attendedLecture?.toIntOrNull() ?: 0
-                    val heldSoFar = subject.totalWithOutMakeupLectureCount?.toIntOrNull() ?: 0
+                val overallPct = if (overallHeldSoFar > 0) overallPresent * 100.0 / overallHeldSoFar else 0.0
+                Text(
+                    "So far overall: $overallPresent / $overallHeldSoFar (" +
+                        String.format(Locale.US, "%.2f", overallPct) + "%)",
+                    fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(16.dp))
 
-                    var totalText by remember(code) {
-                        mutableStateOf(semesterTotalsStore.get(code)?.toString() ?: "")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = totalText,
+                        onValueChange = { newVal -> totalText = newVal.filter { it.isDigit() } },
+                        label = { Text("Total lectures this semester") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(onClick = {
+                        val parsed = totalText.toIntOrNull()
+                        if (parsed != null) {
+                            semesterTotalsStore.setOverallTotal(parsed)
+                            committedTotal = parsed
+                        }
+                    }) {
+                        Text("Submit")
                     }
+                }
 
-                    val semesterTotal = totalText.toIntOrNull()
-                    val result = semesterTotal?.let { computePlanner(present, heldSoFar, it) }
+                if (usingDefault) {
+                    Text(
+                        "Using default from portal data (sum of each subject's planned session count). Change and hit Submit to override \u2014 e.g. next semester.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
+                }
 
-                    Card(modifier = Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.medium) {
-                        Column(modifier = Modifier.padding(14.dp)) {
-                            Text(subject.subjectName ?: code, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                "So far: $present / $heldSoFar (${subject.percentageOfLec ?: "-"}%)",
-                                fontSize = 13.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
-                            OutlinedTextField(
-                                value = totalText,
-                                onValueChange = { newVal ->
-                                    val filtered = newVal.filter { it.isDigit() }
-                                    totalText = filtered
-                                    filtered.toIntOrNull()?.let { semesterTotalsStore.set(code, it) }
-                                },
-                                label = { Text("Total lectures this semester") },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true
-                            )
+                OutlinedTextField(
+                    value = targetText,
+                    onValueChange = { newVal ->
+                        val filtered = newVal.filter { it.isDigit() || it == '.' }
+                        targetText = filtered
+                        filtered.toDoubleOrNull()?.let { semesterTotalsStore.setTarget(it) }
+                    },
+                    label = { Text("Target attendance % (default 75)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
 
-                            Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(20.dp))
 
-                            when {
-                                semesterTotal == null || semesterTotal <= 0 -> {
+                when {
+                    committedTotal == null -> {
+                        Text(
+                            "Enter total lectures for the semester and tap Submit to see your planner.",
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    committedTotal!! < overallHeldSoFar -> {
+                        Text(
+                            "Total must be at least $overallHeldSoFar (lectures already held).",
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                    result != null -> {
+                        Card(modifier = Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.medium) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Text("Remaining lectures: ${result.remainingLectures}", fontSize = 14.sp)
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    "If you don't miss any more: " +
+                                        String.format(Locale.US, "%.2f", result.projectedIfNoMoreMiss) + "%",
+                                    fontSize = 14.sp
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                val targetLabel = if (target == target.toLong().toDouble()) target.toLong().toString() else target.toString()
+                                if (result.achievable75) {
                                     Text(
-                                        "Enter total lectures to see your planner.",
-                                        fontSize = 12.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        "You can still miss up to ${result.maxCanMiss} lecture(s) and stay \u2265$targetLabel%",
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF66BB6A)
                                     )
-                                }
-                                semesterTotal < heldSoFar -> {
+                                } else {
                                     Text(
-                                        "Total must be at least $heldSoFar (lectures already held).",
-                                        fontSize = 12.sp,
-                                        color = MaterialTheme.colorScheme.error
+                                        "Even attending every remaining class, you'll end at " +
+                                            String.format(Locale.US, "%.2f", result.projectedIfNoMoreMiss) +
+                                            "% \u2014 below target",
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFFEF5350)
                                     )
-                                }
-                                result != null -> {
-                                    Divider(modifier = Modifier.padding(vertical = 8.dp))
-                                    Text("Remaining lectures: ${result.remainingLectures}", fontSize = 13.sp)
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        "If you don't miss any more: " +
-                                            String.format(Locale.US, "%.2f", result.projectedIfNoMoreMiss) + "%",
-                                        fontSize = 13.sp
-                                    )
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    if (result.achievable75) {
-                                        Text(
-                                            "You can still miss up to ${result.maxCanMiss} lecture(s) and stay \u226575%",
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color(0xFF66BB6A)
-                                        )
-                                    } else {
-                                        Text(
-                                            "Even attending every remaining class, you'll end at " +
-                                                String.format(Locale.US, "%.2f", result.projectedIfNoMoreMiss) +
-                                                "% \u2014 below 75%",
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color(0xFFEF5350)
-                                        )
-                                    }
                                 }
                             }
                         }

@@ -5,12 +5,18 @@ import android.content.Context
 class SemesterTotalsStore(context: Context) {
     private val prefs = context.getSharedPreferences("semester_totals", Context.MODE_PRIVATE)
 
-    fun get(subjectCode: String): Int? {
-        val v = prefs.getInt(subjectCode, -1)
+    fun getOverallTotal(): Int? {
+        val v = prefs.getInt("overall_total", -1)
         return if (v == -1) null else v
     }
 
-    fun set(subjectCode: String, total: Int) {
-        prefs.edit().putInt(subjectCode, total).apply()
+    fun setOverallTotal(total: Int) {
+        prefs.edit().putInt("overall_total", total).apply()
+    }
+
+    fun getTarget(): Double = prefs.getFloat("target_percent", 75f).toDouble()
+
+    fun setTarget(target: Double) {
+        prefs.edit().putFloat("target_percent", target.toFloat()).apply()
     }
 }
