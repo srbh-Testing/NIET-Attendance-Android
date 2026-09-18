@@ -288,6 +288,7 @@ class MainActivity : ComponentActivity() {
         var showLogoutDialog by remember { mutableStateOf(false) }
         var showSettings by remember { mutableStateOf(false) }
         var selectedSubject by remember { mutableStateOf<AttendanceSubject?>(null) }
+        var showPlanner by remember { mutableStateOf(false) }
         var todayScheduleMap by remember { mutableStateOf<Map<String, List<ScheduleEntry>>>(emptyMap()) }
         var showPlanner by remember { mutableStateOf(false) }
 
@@ -382,7 +383,14 @@ class MainActivity : ComponentActivity() {
                     title = { Text("NIET Attendance") },
                     actions = {
                         IconButton(onClick = { showPlanner = true }) {
+<<<<<<< HEAD
                             Icon(Icons.Default.DateRange, contentDescription = "Planner")
+=======
+                            Icon(
+                                Icons.Default.DateRange,
+                                contentDescription = "Planner"
+                            )
+>>>>>>> d162fcb (Make semester total manually configurable)
                         }
                         IconButton(onClick = { showSettings = true }) {
                             Icon(Icons.Default.Settings, contentDescription = "Settings")
@@ -713,6 +721,7 @@ class MainActivity : ComponentActivity() {
 
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
+<<<<<<< HEAD
     fun PlannerScreen(data: List<AttendanceSubject>, onBack: () -> Unit) {
         val overallPresent = data.sumOf { it.attendedLecture?.toIntOrNull() ?: 0 }
         val overallHeldSoFar = data.sumOf { it.totalWithOutMakeupLectureCount?.toIntOrNull() ?: 0 }
@@ -728,13 +737,59 @@ class MainActivity : ComponentActivity() {
             mutableStateOf(
                 semesterTotalsStore.getTarget().let {
                     if (it == it.toLong().toDouble()) it.toLong().toString() else it.toString()
+=======
+    fun PlannerScreen(
+        data: List<AttendanceSubject>,
+        onBack: () -> Unit
+    ) {
+        val overallPresent =
+            data.sumOf { it.attendedLecture?.toIntOrNull() ?: 0 }
+
+        val overallHeldSoFar =
+            data.sumOf {
+                it.totalWithOutMakeupLectureCount?.toIntOrNull() ?: 0
+            }
+
+        var totalText by remember {
+            mutableStateOf(
+                semesterTotalsStore.getOverallTotal()?.toString() ?: ""
+            )
+        }
+
+        var committedTotal by remember {
+            mutableStateOf(
+                semesterTotalsStore.getOverallTotal()
+            )
+        }
+
+        var targetText by remember {
+            mutableStateOf(
+                semesterTotalsStore.getTarget().let {
+                    if (it == it.toLong().toDouble()) {
+                        it.toLong().toString()
+                    } else {
+                        it.toString()
+                    }
+>>>>>>> d162fcb (Make semester total manually configurable)
                 }
             )
         }
 
         val target = targetText.toDoubleOrNull() ?: 75.0
+<<<<<<< HEAD
         val result = committedTotal?.let { computePlanner(overallPresent, overallHeldSoFar, it, target) }
         val usingDefault = semesterTotalsStore.getOverallTotal() == null && defaultTotal != null
+=======
+
+        val result = committedTotal?.let {
+            computePlanner(
+                overallPresent,
+                overallHeldSoFar,
+                it,
+                target
+            )
+        }
+>>>>>>> d162fcb (Make semester total manually configurable)
 
         Scaffold(
             topBar = {
@@ -742,18 +797,30 @@ class MainActivity : ComponentActivity() {
                     title = { Text("Semester Planner") },
                     navigationIcon = {
                         IconButton(onClick = onBack) {
+<<<<<<< HEAD
                             Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+=======
+                            Icon(
+                                Icons.Default.ArrowBack,
+                                contentDescription = "Back"
+                            )
+>>>>>>> d162fcb (Make semester total manually configurable)
                         }
                     }
                 )
             }
         ) { padding ->
+<<<<<<< HEAD
+=======
+
+>>>>>>> d162fcb (Make semester total manually configurable)
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
                     .padding(16.dp)
             ) {
+<<<<<<< HEAD
                 val overallPct = if (overallHeldSoFar > 0) overallPresent * 100.0 / overallHeldSoFar else 0.0
                 Text(
                     "So far overall: $overallPresent / $overallHeldSoFar (" +
@@ -779,10 +846,62 @@ class MainActivity : ComponentActivity() {
                             committedTotal = parsed
                         }
                     }) {
+=======
+
+                val overallPct =
+                    if (overallHeldSoFar > 0) {
+                        overallPresent * 100.0 / overallHeldSoFar
+                    } else {
+                        0.0
+                    }
+
+                Text(
+                    "So far overall: $overallPresent / $overallHeldSoFar (" +
+                        String.format(
+                            Locale.US,
+                            "%.2f",
+                            overallPct
+                        ) +
+                        "%)",
+                    fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = totalText,
+                        onValueChange = { value ->
+                            totalText = value.filter { it.isDigit() }
+                        },
+                        label = {
+                            Text("Total lectures this semester")
+                        },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true
+                    )
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    Button(
+                        onClick = {
+                            val parsed = totalText.toIntOrNull()
+
+                            if (parsed != null && parsed > 0) {
+                                semesterTotalsStore.setOverallTotal(parsed)
+                                committedTotal = parsed
+                            }
+                        }
+                    ) {
+>>>>>>> d162fcb (Make semester total manually configurable)
                         Text("Submit")
                     }
                 }
 
+<<<<<<< HEAD
                 if (usingDefault) {
                     Text(
                         "Using default from portal data (sum of each subject's planned session count). Change and hit Submit to override \u2014 e.g. next semester.",
@@ -792,16 +911,38 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
+=======
+>>>>>>> d162fcb (Make semester total manually configurable)
                 Spacer(modifier = Modifier.height(16.dp))
 
                 OutlinedTextField(
                     value = targetText,
+<<<<<<< HEAD
                     onValueChange = { newVal ->
                         val filtered = newVal.filter { it.isDigit() || it == '.' }
                         targetText = filtered
                         filtered.toDoubleOrNull()?.let { semesterTotalsStore.setTarget(it) }
                     },
                     label = { Text("Target attendance % (default 75)") },
+=======
+                    onValueChange = { value ->
+                        val filtered =
+                            value.filter {
+                                it.isDigit() || it == '.'
+                            }
+
+                        targetText = filtered
+
+                        filtered.toDoubleOrNull()?.let {
+                            if (it in 0.0..100.0) {
+                                semesterTotalsStore.setTarget(it)
+                            }
+                        }
+                    },
+                    label = {
+                        Text("Target attendance % (default 75)")
+                    },
+>>>>>>> d162fcb (Make semester total manually configurable)
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true
                 )
@@ -816,6 +957,10 @@ class MainActivity : ComponentActivity() {
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+<<<<<<< HEAD
+=======
+
+>>>>>>> d162fcb (Make semester total manually configurable)
                     committedTotal!! < overallHeldSoFar -> {
                         Text(
                             "Total must be at least $overallHeldSoFar (lectures already held).",
@@ -823,6 +968,7 @@ class MainActivity : ComponentActivity() {
                             color = MaterialTheme.colorScheme.error
                         )
                     }
+<<<<<<< HEAD
                     result != null -> {
                         Card(modifier = Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.medium) {
                             Column(modifier = Modifier.padding(16.dp)) {
@@ -850,6 +996,70 @@ class MainActivity : ComponentActivity() {
                                         fontSize = 15.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = Color(0xFFEF5350)
+=======
+
+                    result != null -> {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = MaterialTheme.shapes.medium
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(16.dp)
+                            ) {
+
+                                Text(
+                                    "Remaining lectures: ${result.remainingLectures}",
+                                    fontSize = 14.sp
+                                )
+
+                                Spacer(
+                                    modifier = Modifier.height(6.dp)
+                                )
+
+                                Text(
+                                    "If you don't miss any more: " +
+                                        String.format(
+                                            Locale.US,
+                                            "%.2f",
+                                            result.projectedIfNoMoreMiss
+                                        ) +
+                                        "%",
+                                    fontSize = 14.sp
+                                )
+
+                                Spacer(
+                                    modifier = Modifier.height(6.dp)
+                                )
+
+                                val targetLabel =
+                                    if (target == target.toLong().toDouble()) {
+                                        target.toLong().toString()
+                                    } else {
+                                        target.toString()
+                                    }
+
+                                if (result.achievable75) {
+                                    Text(
+                                        "You can still miss up to " +
+                                            "${result.maxCanMiss} lecture(s) " +
+                                            "and stay ≥$targetLabel%",
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                } else {
+                                    Text(
+                                        "Even attending every remaining class, " +
+                                            "you'll end at " +
+                                            String.format(
+                                                Locale.US,
+                                                "%.2f",
+                                                result.projectedIfNoMoreMiss
+                                            ) +
+                                            "% — below target",
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.error
+>>>>>>> d162fcb (Make semester total manually configurable)
                                     )
                                 }
                             }
