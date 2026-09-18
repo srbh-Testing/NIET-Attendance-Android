@@ -41,21 +41,20 @@ private fun copyToClipboard(context: Context, label: String, text: String) {
     clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
 }
 
-/**
- * Status of a subject's class(es) today, relative to the current time.
- * RUNNING  -> a class for this subject is happening right now
- * NEXT     -> not running now, but has the single soonest upcoming class across ALL of today's schedule
- * UPCOMING -> scheduled later today, but not the immediate next one
- * DONE     -> every class for this subject today has already finished
- */
 enum class TodayClassStatus { RUNNING, NEXT, UPCOMING, DONE }
 
 private data class ScheduleSlot(val code: String, val start: Date, val end: Date)
 
-private fun parseTimeToday(hhmma: String?): Date? {
-    if (hhmma.isNullOrBlank()) return null
+// Fixed time parser to handle both 12h and 24h formats dynamically to prevent AM/PM bugs
+private fun parseTimeToday(timeStr: String?): Date? {
+    if (timeStr.isNullOrBlank()) return null
     return try {
-        val parsed = SimpleDateFormat("hh:mm a", Locale.US).parse(hhmma) ?: return null
+        val normalized = timeStr.trim().uppercase(Locale.US).replace(Regex("(\\d)(AM|PM)"), "$1 $2")
+        val hasAmPm = normalized.contains("AM") || normalized.contains("PM")
+        val formatStr = if (hasAmPm) "hh:mm a" else "HH:mm"
+        
+        val parsed = SimpleDateFormat(formatStr, Locale.US).parse(normalized) ?: return null
+        
         val timeCal = Calendar.getInstance().apply { time = parsed }
         val cal = Calendar.getInstance()
         cal.set(Calendar.HOUR_OF_DAY, timeCal.get(Calendar.HOUR_OF_DAY))
@@ -73,20 +72,31 @@ private fun computeTodayStatuses(todayScheduleMap: Map<String, List<ScheduleEntr
     val slots = mutableListOf<ScheduleSlot>()
     for ((code, entries) in todayScheduleMap) {
         for (e in entries) {
-            val start = parseTimeToday(e.startTimeHHMMA) ?: continue
-            val end = parseTimeToday(e.endTimeHHMMA) ?: start
-            slots.add(ScheduleSlot(code, start, end))
+            // Prefer 24h format if available, far more reliable
+            val startStr = e.startTimeHM?.takeIf { it.isNotBlank() } ?: e.startTimeHHMMA
+            val endStr = e.endTimeHM?.takeIf { it.isNotBlank() } ?: e.endTimeHHMMA
+            
+            val start = parseTimeToday(startStr) ?: continue
+            // If end time is missing, assume a 50-minute class so it stays "Running" and doesn't instantly become "Done"
+            val end = parseTimeToday(endStr) ?: Date(start.time + 50L * 60 * 1000)
+            
+            // Fix edge cases where end time is parsed as earlier than start time due to missing PM
+            val actualEnd = if (end < start) Date(start.time + 50L * 60 * 1000) else end
+            
+            slots.add(ScheduleSlot(code, start, actualEnd))
         }
     }
-    // The single soonest class that hasn't started yet, across every subject.
-    val nextSlot = slots.filter { it.start > now }.minByOrNull { it.start }
+    
+    // Find the exact starting time of the next soonest upcoming class
+    val nextSlotTime = slots.filter { it.start > now }.minByOrNull { it.start }?.start
 
     val result = mutableMapOf<String, TodayClassStatus>()
     for (code in todayScheduleMap.keys) {
         val codeSlots = slots.filter { it.code == code }
         result[code] = when {
             codeSlots.any { it.start <= now && now <= it.end } -> TodayClassStatus.RUNNING
-            nextSlot != null && codeSlots.any { it === nextSlot } -> TodayClassStatus.NEXT
+            // Check by exact time instead of reference to correctly flag simultaneous next classes
+            nextSlotTime != null && codeSlots.any { it.start == nextSlotTime } -> TodayClassStatus.NEXT
             codeSlots.isNotEmpty() && codeSlots.all { it.end < now } -> TodayClassStatus.DONE
             else -> TodayClassStatus.UPCOMING
         }
@@ -96,8 +106,6 @@ private fun computeTodayStatuses(todayScheduleMap: Map<String, List<ScheduleEntr
 
 private data class PeriodSlot(val hour: Int, val minute: Int, val label: String)
 
-// Fixed daily period start times — derived from the timetable, not from the API.
-// Adjust here if a semester's slot timings ever change.
 private val periodSlots = listOf(
     PeriodSlot(9, 10, "1"),
     PeriodSlot(10, 0, "2"),
@@ -109,24 +117,12 @@ private val periodSlots = listOf(
     PeriodSlot(16, 10, "8")
 )
 
-/**
- * Every period number (from the fixed slot table) that this subject has
- * scheduled today, e.g. listOf("6", "8") for a subject with two classes.
- * Used to show "Lec 6" / "Lec 6, 8" next to the Running/Next/Later/Done badge.
- */
-private fun todayPeriodLabels(code: String, todayScheduleMap: Map<String, List<ScheduleEntry>>): String {
-    val entries = todayScheduleMap[code] ?: return ""
-    val labels = entries
-        .mapNotNull { periodNumberForStime(it.startTimeHHMMA).takeIf { p -> p != "-" } }
-        .distinct()
-    return labels.joinToString(", ")
-}
-
 private fun periodNumberForStime(stime: String?): String {
     if (stime.isNullOrBlank()) return "-"
     return try {
         val normalized = stime.trim().uppercase(Locale.US).replace(Regex("(\\d)(AM|PM)"), "$1 $2")
-        val parsed = SimpleDateFormat("hh:mm a", Locale.US).parse(normalized) ?: return "-"
+        val hasAmPm = normalized.contains("AM") || normalized.contains("PM")
+        val parsed = SimpleDateFormat(if (hasAmPm) "hh:mm a" else "HH:mm", Locale.US).parse(normalized) ?: return "-"
         val cal = Calendar.getInstance().apply { time = parsed }
         val hour = cal.get(Calendar.HOUR_OF_DAY)
         val minute = cal.get(Calendar.MINUTE)
@@ -136,12 +132,17 @@ private fun periodNumberForStime(stime: String?): String {
     }
 }
 
-/**
- * Lecture/period number to show in the "Lec" column.
- * Prefer the server's own sessionNo (it reflects the actual period that day,
- * including reschedules/extra classes) and only fall back to guessing from
- * the fixed period-time table when the server doesn't send one.
- */
+private fun todayPeriodLabels(code: String, todayScheduleMap: Map<String, List<ScheduleEntry>>): String {
+    val entries = todayScheduleMap[code] ?: return ""
+    val labels = entries
+        .mapNotNull { 
+            val stime = it.startTimeHM?.takeIf { s -> s.isNotBlank() } ?: it.startTimeHHMMA
+            periodNumberForStime(stime).takeIf { p -> p != "-" } 
+        }
+        .distinct()
+    return labels.joinToString(", ")
+}
+
 private fun lecNumberFor(record: SubjectAttendanceRecord): String {
     val fromServer = record.sessionNo?.trim()
     if (!fromServer.isNullOrBlank()) return fromServer
@@ -190,8 +191,7 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-
-    @Composable
+@Composable
     fun AppContent() {
         var isLoggedIn by remember { mutableStateOf(secureStorage.getUsername() != null) }
 
@@ -361,8 +361,7 @@ class MainActivity : ComponentActivity() {
             )
             return
         }
-
-        selectedSubject?.let { subject ->
+selectedSubject?.let { subject ->
             BackHandler { selectedSubject = null }
             SubjectDetailScreen(
                 subject = subject,
@@ -563,8 +562,7 @@ class MainActivity : ComponentActivity() {
             )
             }
         }
-
-        if (showLogoutDialog) {
+if (showLogoutDialog) {
             AlertDialog(
                 onDismissRequest = { showLogoutDialog = false },
                 title = { Text("Logout") },
@@ -921,8 +919,7 @@ class MainActivity : ComponentActivity() {
                                     } else {
                                         target.toString()
                                     }
-
-                                if (result.achievable75) {
+if (result.achievable75) {
                                     Text(
                                         "You can still miss up to " +
                                             "${result.maxCanMiss} lecture(s) " +
