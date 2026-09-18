@@ -291,6 +291,19 @@ class MainActivity : ComponentActivity() {
         var todayScheduleMap by remember { mutableStateOf<Map<String, List<ScheduleEntry>>>(emptyMap()) }
         var showPlanner by remember { mutableStateOf(false) }
 
+        suspend fun applyAttendanceResult(subjects: List<AttendanceSubject>) {
+            attendanceData = subjects
+            val snapshot = subjects.toDaySnapshot()
+            val prev = historyStore.recordAndGetPrevious(snapshot)
+            currentSnapshot = snapshot
+            previousSnapshot = prev
+            lastUpdated = SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault()).format(Date())
+            val scheduleResult = repository.fetchTodaySchedule()
+            if (scheduleResult.isSuccess) {
+                todayScheduleMap = scheduleResult.getOrNull() ?: emptyMap()
+            }
+        }
+
         fun fetchWrapper() {
             isLoading = true
             errorMsg = null
@@ -298,19 +311,7 @@ class MainActivity : ComponentActivity() {
             coroutineScope.launch {
                 val result = repository.fetchAttendance(params)
                 if (result.isSuccess) {
-                    val subjects = result.getOrNull()
-                    attendanceData = subjects
-                    if (subjects != null) {
-                        val snapshot = subjects.toDaySnapshot()
-                        val prev = historyStore.recordAndGetPrevious(snapshot)
-                        currentSnapshot = snapshot
-                        previousSnapshot = prev
-                    }
-                    lastUpdated = SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault()).format(Date())
-                    val scheduleResult = repository.fetchTodaySchedule()
-                    if (scheduleResult.isSuccess) {
-                        todayScheduleMap = scheduleResult.getOrNull() ?: emptyMap()
-                    }
+                    result.getOrNull()?.let { applyAttendanceResult(it) }
                 } else {
                     val ex = result.exceptionOrNull()
                     if (ex is SecurityException) {
@@ -321,19 +322,7 @@ class MainActivity : ComponentActivity() {
                             if (loginRes.isSuccess) {
                                 val retry = repository.fetchAttendance(params)
                                 if (retry.isSuccess) {
-                                    val subjects = retry.getOrNull()
-                                    attendanceData = subjects
-                                    if (subjects != null) {
-                                        val snapshot = subjects.toDaySnapshot()
-                                        val prev = historyStore.recordAndGetPrevious(snapshot)
-                                        currentSnapshot = snapshot
-                                        previousSnapshot = prev
-                                    }
-                                    lastUpdated = SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault()).format(Date())
-                    val scheduleResult = repository.fetchTodaySchedule()
-                    if (scheduleResult.isSuccess) {
-                        todayScheduleMap = scheduleResult.getOrNull() ?: emptyMap()
-                    }
+                                    retry.getOrNull()?.let { applyAttendanceResult(it) }
                                 } else {
                                     errorMsg = "Auto-login succeeded, but fetch failed: ${retry.exceptionOrNull()?.message}"
                                 }
@@ -351,7 +340,8 @@ class MainActivity : ComponentActivity() {
                 isLoading = false
             }
         }
-if (showSettings) {
+
+        if (showSettings) {
             BackHandler { showSettings = false }
             SettingsScreen(
                 onBack = { showSettings = false },
@@ -592,7 +582,8 @@ if (showSettings) {
             )
         }
     }
-@Composable
+
+    @Composable
     fun DeltaBadge(delta: Int) {
         val (color, text) = when {
             delta > 0 -> Color(0xFF2E7D32) to "+$delta"
@@ -612,7 +603,8 @@ if (showSettings) {
             )
         }
     }
-@OptIn(ExperimentalMaterial3Api::class)
+
+    @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     fun SubjectDetailScreen(subject: AttendanceSubject, todaySchedule: List<ScheduleEntry> = emptyList(), onBack: () -> Unit) {
         val coroutineScope = rememberCoroutineScope()

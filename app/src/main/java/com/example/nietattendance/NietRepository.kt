@@ -7,6 +7,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.*
 import java.io.IOException
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 class NietRepository(context: Context) {
@@ -60,146 +63,98 @@ class NietRepository(context: Context) {
         }
     }
 
-    suspend fun fetchAttendance(params: AttendanceParams): Result<List<AttendanceSubject>> = withContext(Dispatchers.IO) {
+    /**
+     * Shared GET helper for every authenticated JSON endpoint: builds the request,
+     * checks for the common failure signatures (redirected-to-login HTML, empty
+     * body), and returns the raw trimmed body on success. Every fetch* method below
+     * just supplies its path/params and parses this body — avoids repeating the
+     * same session-expiry/empty-body checks in each method separately.
+     */
+    private suspend fun authenticatedGet(
+        pathSegment: String,
+        queryParams: Map<String, String> = emptyMap(),
+        referer: String? = null,
+        allowEmptyBody: Boolean = false
+    ): Result<String> = withContext(Dispatchers.IO) {
         try {
-            val url = HttpUrl.Builder()
+            val urlBuilder = HttpUrl.Builder()
                 .scheme("https")
                 .host("nietcloud.niet.co.in")
-                .addPathSegment("stu_getStudentBatchCourseAttendanceList.json")
-                .addQueryParameter("batchsemestercapacity", params.batchsemestercapacity)
-                .addQueryParameter("subejctwiseBatchIds", params.subejctwiseBatchIds)
-                .addQueryParameter("subjectwisestudentids", params.subjectwisestudentids)
-                .build()
+                .addPathSegment(pathSegment)
+            for ((k, v) in queryParams) {
+                urlBuilder.addQueryParameter(k, v)
+            }
 
-            val request = Request.Builder()
-                .url(url)
+            val requestBuilder = Request.Builder()
+                .url(urlBuilder.build())
                 .addHeader("X-Requested-With", "XMLHttpRequest")
                 .addHeader("User-Agent", userAgent)
                 .addHeader("Accept", "application/json, text/javascript, */*; q=0.01")
-                .build()
+            if (referer != null) {
+                requestBuilder.addHeader("Referer", referer)
+            }
 
-            val response = client.newCall(request).execute()
+            val response = client.newCall(requestBuilder.build()).execute()
             val body = response.body?.string() ?: throw IOException("Empty response body")
             val bodyStr = body.trim()
 
+            if (bodyStr.isEmpty() && !allowEmptyBody) {
+                throw SecurityException("Empty response - session/ID may be stale")
+            }
             if (bodyStr.startsWith("<") || bodyStr.contains("login.htm")) {
                 throw SecurityException("Session expired")
             }
 
-            try {
-                val listType = object : TypeToken<List<AttendanceSubject>>() {}.type
-                val list: List<AttendanceSubject> = gson.fromJson(bodyStr, listType)
-                Result.success(list)
-            } catch (e: Exception) {
-                throw SecurityException("Format error/Session expired. Body: ${bodyStr.take(100)}")
-            }
-
+            Result.success(bodyStr)
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
 
-    suspend fun fetchSubjectDetail(encoSubjectwiseStudentId: String): Result<List<SubjectAttendanceRecord>> = withContext(Dispatchers.IO) {
-        try {
-            val url = HttpUrl.Builder()
-                .scheme("https")
-                .host("nietcloud.niet.co.in")
-                .addPathSegment("stu_getSubjectWiseStudentAttendance.json")
-                .addQueryParameter("encoSubjectwiseStudentId", encoSubjectwiseStudentId)
-                .build()
+    suspend fun fetchAttendance(params: AttendanceParams): Result<List<AttendanceSubject>> {
+        val body = authenticatedGet(
+            "stu_getStudentBatchCourseAttendanceList.json",
+            mapOf(
+                "batchsemestercapacity" to params.batchsemestercapacity,
+                "subejctwiseBatchIds" to params.subejctwiseBatchIds,
+                "subjectwisestudentids" to params.subjectwisestudentids
+            )
+        ).getOrElse { return Result.failure(it) }
 
-            val request = Request.Builder()
-                .url(url)
-                .addHeader("X-Requested-With", "XMLHttpRequest")
-                .addHeader("User-Agent", userAgent)
-                .addHeader("Accept", "application/json, text/javascript, */*; q=0.01")
-                .addHeader("Referer", "$baseUrl/studentCourses.htm?shwA=%2700A%27")
-                .build()
+        return try {
+            val listType = object : TypeToken<List<AttendanceSubject>>() {}.type
+            Result.success(gson.fromJson<List<AttendanceSubject>>(body, listType))
+        } catch (e: Exception) {
+            Result.failure(SecurityException("Format error/Session expired. Body: ${body.take(100)}"))
+        }
+    }
 
-            val response = client.newCall(request).execute()
-            val body = response.body?.string() ?: throw IOException("Empty response body")
-            val bodyStr = body.trim()
+    suspend fun fetchSubjectDetail(encoSubjectwiseStudentId: String): Result<List<SubjectAttendanceRecord>> {
+        val body = authenticatedGet(
+            "stu_getSubjectWiseStudentAttendance.json",
+            mapOf("encoSubjectwiseStudentId" to encoSubjectwiseStudentId),
+            referer = "$baseUrl/studentCourses.htm?shwA=%2700A%27"
+        ).getOrElse { return Result.failure(it) }
 
-            if (bodyStr.isEmpty()) {
-                throw SecurityException("Empty response - ID may be stale, refetch attendance first")
-            }
-            if (bodyStr.startsWith("<") || bodyStr.contains("login.htm")) {
-                throw SecurityException("Session expired")
-            }
-
+        return try {
             val listType = object : TypeToken<List<SubjectAttendanceRecord>>() {}.type
-            val list: List<SubjectAttendanceRecord> = gson.fromJson(bodyStr, listType)
-            Result.success(list)
+            Result.success(gson.fromJson<List<SubjectAttendanceRecord>>(body, listType))
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
 
-    suspend fun fetchTodayScheduleSubjectCodes(): Result<Set<String>> = withContext(Dispatchers.IO) {
-        try {
-            val dateStr = java.text.SimpleDateFormat("MMM d,yyyy", java.util.Locale.US).format(java.util.Date())
-            val url = HttpUrl.Builder()
-                .scheme("https")
-                .host("nietcloud.niet.co.in")
-                .addPathSegment("stu_getTodaysScheduleForStudentLoggedIn.json")
-                .addQueryParameter("date", dateStr)
-                .build()
+    suspend fun fetchTodaySchedule(): Result<Map<String, List<ScheduleEntry>>> {
+        val dateStr = SimpleDateFormat("MMM d,yyyy", Locale.US).format(Date())
+        val body = authenticatedGet(
+            "stu_getTodaysScheduleForStudentLoggedIn.json",
+            mapOf("date" to dateStr)
+        ).getOrElse { return Result.failure(it) }
 
-            val request = Request.Builder()
-                .url(url)
-                .addHeader("X-Requested-With", "XMLHttpRequest")
-                .addHeader("User-Agent", userAgent)
-                .addHeader("Accept", "application/json, text/javascript, */*; q=0.01")
-                .build()
-
-            val response = client.newCall(request).execute()
-            val body = response.body?.string() ?: throw IOException("Empty response body")
-            val bodyStr = body.trim()
-
-            if (bodyStr.startsWith("<") || bodyStr.contains("login.htm")) {
-                throw SecurityException("Session expired")
-            }
-
+        return try {
             val listType = object : TypeToken<List<TodayScheduleWrapper>>() {}.type
-            val wrappers: List<TodayScheduleWrapper> = gson.fromJson(bodyStr, listType)
-            val codes = wrappers.flatMap { it.timetable ?: emptyList() }
-                .mapNotNull { it.subShortName }
-                .toSet()
-            Result.success(codes)
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
-    }
-
-    suspend fun fetchTodaySchedule(): Result<Map<String, List<ScheduleEntry>>> = withContext(Dispatchers.IO) {
-        try {
-            val dateStr = java.text.SimpleDateFormat("MMM d,yyyy", java.util.Locale.US).format(java.util.Date())
-            val url = HttpUrl.Builder()
-                .scheme("https")
-                .host("nietcloud.niet.co.in")
-                .addPathSegment("stu_getTodaysScheduleForStudentLoggedIn.json")
-                .addQueryParameter("date", dateStr)
-                .build()
-
-            val request = Request.Builder()
-                .url(url)
-                .addHeader("X-Requested-With", "XMLHttpRequest")
-                .addHeader("User-Agent", userAgent)
-                .addHeader("Accept", "application/json, text/javascript, */*; q=0.01")
-                .build()
-
-            val response = client.newCall(request).execute()
-            val body = response.body?.string() ?: throw IOException("Empty response body")
-            val bodyStr = body.trim()
-
-            if (bodyStr.startsWith("<") || bodyStr.contains("login.htm")) {
-                throw SecurityException("Session expired")
-            }
-
-            val listType = object : TypeToken<List<TodayScheduleWrapper>>() {}.type
-            val wrappers: List<TodayScheduleWrapper> = gson.fromJson(bodyStr, listType)
-            val allEntries = wrappers.flatMap { it.timetable ?: emptyList() }
-            val grouped = allEntries
+            val wrappers: List<TodayScheduleWrapper> = gson.fromJson(body, listType)
+            val grouped = wrappers.flatMap { it.timetable ?: emptyList() }
                 .filter { it.subShortName != null }
                 .groupBy { it.subShortName!! }
             Result.success(grouped)
