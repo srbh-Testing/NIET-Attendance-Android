@@ -45,26 +45,40 @@ enum class TodayClassStatus { RUNNING, NEXT, UPCOMING, DONE }
 
 private data class ScheduleSlot(val code: String, val start: Date, val end: Date)
 
-// Fixed time parser to handle both 12h and 24h formats dynamically to prevent AM/PM bugs
 private fun parseTimeToday(timeStr: String?): Date? {
     if (timeStr.isNullOrBlank()) return null
-    return try {
-        val normalized = timeStr.trim().uppercase(Locale.US).replace(Regex("(\\d)(AM|PM)"), "$1 $2")
-        val hasAmPm = normalized.contains("AM") || normalized.contains("PM")
-        val formatStr = if (hasAmPm) "hh:mm a" else "HH:mm"
-        
-        val parsed = SimpleDateFormat(formatStr, Locale.US).parse(normalized) ?: return null
-        
-        val timeCal = Calendar.getInstance().apply { time = parsed }
-        val cal = Calendar.getInstance()
-        cal.set(Calendar.HOUR_OF_DAY, timeCal.get(Calendar.HOUR_OF_DAY))
-        cal.set(Calendar.MINUTE, timeCal.get(Calendar.MINUTE))
-        cal.set(Calendar.SECOND, 0)
-        cal.set(Calendar.MILLISECOND, 0)
-        cal.time
-    } catch (e: Exception) {
-        null
+    val cleaned = timeStr.trim().uppercase(Locale.US)
+        .replace(Regex("\\s+"), " ")
+        .replace(Regex("(?i)(\\d)(A\\.?M\\.?|P\\.?M\\.?)"), "$1 $2")
+        .replace(".", "")
+
+    val formats = listOf(
+        "hh:mm a",
+        "h:mm a",
+        "hh:mma",
+        "h:mma",
+        "HH:mm"
+    )
+
+    for (format in formats) {
+        try {
+            val parser = SimpleDateFormat(format, Locale.US)
+            parser.isLenient = true
+            val parsed = parser.parse(cleaned)
+            if (parsed != null) {
+                val timeCal = Calendar.getInstance().apply { time = parsed }
+                val cal = Calendar.getInstance()
+                cal.set(Calendar.HOUR_OF_DAY, timeCal.get(Calendar.HOUR_OF_DAY))
+                cal.set(Calendar.MINUTE, timeCal.get(Calendar.MINUTE))
+                cal.set(Calendar.SECOND, 0)
+                cal.set(Calendar.MILLISECOND, 0)
+                return cal.time
+            }
+        } catch (e: Exception) {
+            // Try next format
+        }
     }
+    return null
 }
 
 private fun computeTodayStatuses(todayScheduleMap: Map<String, List<ScheduleEntry>>): Map<String, TodayClassStatus> {
@@ -72,22 +86,18 @@ private fun computeTodayStatuses(todayScheduleMap: Map<String, List<ScheduleEntr
     val slots = mutableListOf<ScheduleSlot>()
     for ((code, entries) in todayScheduleMap) {
         for (e in entries) {
-            // Prefer 24h format if available, far more reliable
             val startStr = e.startTimeHM?.takeIf { it.isNotBlank() } ?: e.startTimeHHMMA
             val endStr = e.endTimeHM?.takeIf { it.isNotBlank() } ?: e.endTimeHHMMA
             
             val start = parseTimeToday(startStr) ?: continue
-            // If end time is missing, assume a 50-minute class so it stays "Running" and doesn't instantly become "Done"
             val end = parseTimeToday(endStr) ?: Date(start.time + 50L * 60 * 1000)
             
-            // Fix edge cases where end time is parsed as earlier than start time due to missing PM
             val actualEnd = if (end < start) Date(start.time + 50L * 60 * 1000) else end
             
             slots.add(ScheduleSlot(code, start, actualEnd))
         }
     }
     
-    // Find the exact starting time of the next soonest upcoming class
     val nextSlotTime = slots.filter { it.start > now }.minByOrNull { it.start }?.start
 
     val result = mutableMapOf<String, TodayClassStatus>()
@@ -95,7 +105,6 @@ private fun computeTodayStatuses(todayScheduleMap: Map<String, List<ScheduleEntr
         val codeSlots = slots.filter { it.code == code }
         result[code] = when {
             codeSlots.any { it.start <= now && now <= it.end } -> TodayClassStatus.RUNNING
-            // Check by exact time instead of reference to correctly flag simultaneous next classes
             nextSlotTime != null && codeSlots.any { it.start == nextSlotTime } -> TodayClassStatus.NEXT
             codeSlots.isNotEmpty() && codeSlots.all { it.end < now } -> TodayClassStatus.DONE
             else -> TodayClassStatus.UPCOMING
@@ -118,18 +127,11 @@ private val periodSlots = listOf(
 )
 
 private fun periodNumberForStime(stime: String?): String {
-    if (stime.isNullOrBlank()) return "-"
-    return try {
-        val normalized = stime.trim().uppercase(Locale.US).replace(Regex("(\\d)(AM|PM)"), "$1 $2")
-        val hasAmPm = normalized.contains("AM") || normalized.contains("PM")
-        val parsed = SimpleDateFormat(if (hasAmPm) "hh:mm a" else "HH:mm", Locale.US).parse(normalized) ?: return "-"
-        val cal = Calendar.getInstance().apply { time = parsed }
-        val hour = cal.get(Calendar.HOUR_OF_DAY)
-        val minute = cal.get(Calendar.MINUTE)
-        periodSlots.firstOrNull { it.hour == hour && it.minute == minute }?.label ?: "-"
-    } catch (e: Exception) {
-        "-"
-    }
+    val parsedDate = parseTimeToday(stime) ?: return "-"
+    val cal = Calendar.getInstance().apply { time = parsedDate }
+    val hour = cal.get(Calendar.HOUR_OF_DAY)
+    val minute = cal.get(Calendar.MINUTE)
+    return periodSlots.firstOrNull { it.hour == hour && it.minute == minute }?.label ?: "-"
 }
 
 private fun todayPeriodLabels(code: String, todayScheduleMap: Map<String, List<ScheduleEntry>>): String {
@@ -171,8 +173,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var historyStore: HistoryStore
     private lateinit var repository: NietRepository
     private lateinit var semesterTotalsStore: SemesterTotalsStore
-
-    override fun onCreate(savedInstanceState: Bundle?) {
+override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         secureStorage = SecureStorage(this)
         paramsStore = AttendanceParamsStore(this)
@@ -191,7 +192,8 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-@Composable
+
+    @Composable
     fun AppContent() {
         var isLoggedIn by remember { mutableStateOf(secureStorage.getUsername() != null) }
 
@@ -361,7 +363,8 @@ class MainActivity : ComponentActivity() {
             )
             return
         }
-selectedSubject?.let { subject ->
+
+        selectedSubject?.let { subject ->
             BackHandler { selectedSubject = null }
             SubjectDetailScreen(
                 subject = subject,
@@ -469,8 +472,7 @@ selectedSubject?.let { subject ->
                             )
                         }
                         Spacer(modifier = Modifier.height(10.dp))
-
-                        val todayStatuses = remember(todayScheduleMap) { computeTodayStatuses(todayScheduleMap) }
+val todayStatuses = remember(todayScheduleMap) { computeTodayStatuses(todayScheduleMap) }
 
                         LazyColumn(
                             contentPadding = PaddingValues(bottom = 80.dp),
@@ -562,7 +564,8 @@ selectedSubject?.let { subject ->
             )
             }
         }
-if (showLogoutDialog) {
+
+        if (showLogoutDialog) {
             AlertDialog(
                 onDismissRequest = { showLogoutDialog = false },
                 title = { Text("Logout") },
@@ -711,8 +714,7 @@ if (showLogoutDialog) {
             }
         }
     }
-
-    @OptIn(ExperimentalMaterial3Api::class)
+  @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     fun PlannerScreen(
         data: List<AttendanceSubject>,
@@ -919,7 +921,8 @@ if (showLogoutDialog) {
                                     } else {
                                         target.toString()
                                     }
-if (result.achievable75) {
+
+                                if (result.achievable75) {
                                     Text(
                                         "You can still miss up to " +
                                             "${result.maxCanMiss} lecture(s) " +
@@ -949,8 +952,7 @@ if (result.achievable75) {
             }
         }
     }
-
-    @OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class)
     @Composable
     fun SettingsScreen(onBack: () -> Unit, onSaved: () -> Unit) {
         val context = LocalContext.current
