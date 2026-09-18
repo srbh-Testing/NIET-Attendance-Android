@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -168,6 +169,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var paramsStore: AttendanceParamsStore
     private lateinit var historyStore: HistoryStore
     private lateinit var repository: NietRepository
+    private lateinit var semesterTotalsStore: SemesterTotalsStore
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -175,6 +177,7 @@ class MainActivity : ComponentActivity() {
         paramsStore = AttendanceParamsStore(this)
         historyStore = HistoryStore(this)
         repository = NietRepository(this)
+        semesterTotalsStore = SemesterTotalsStore(this)
 
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
@@ -286,6 +289,7 @@ class MainActivity : ComponentActivity() {
         var showSettings by remember { mutableStateOf(false) }
         var selectedSubject by remember { mutableStateOf<AttendanceSubject?>(null) }
         var todayScheduleMap by remember { mutableStateOf<Map<String, List<ScheduleEntry>>>(emptyMap()) }
+        var showPlanner by remember { mutableStateOf(false) }
 
         fun fetchWrapper() {
             isLoading = true
@@ -359,6 +363,15 @@ if (showSettings) {
             return
         }
 
+        if (showPlanner) {
+            BackHandler { showPlanner = false }
+            PlannerScreen(
+                data = attendanceData ?: emptyList(),
+                onBack = { showPlanner = false }
+            )
+            return
+        }
+
         selectedSubject?.let { subject ->
             BackHandler { selectedSubject = null }
             SubjectDetailScreen(
@@ -378,6 +391,9 @@ if (showSettings) {
                 TopAppBar(
                     title = { Text("NIET Attendance") },
                     actions = {
+                        IconButton(onClick = { showPlanner = true }) {
+                            Icon(Icons.Default.DateRange, contentDescription = "Planner")
+                        }
                         IconButton(onClick = { showSettings = true }) {
                             Icon(Icons.Default.Settings, contentDescription = "Settings")
                         }
@@ -696,6 +712,118 @@ if (showSettings) {
                                 )
                             }
                             Divider()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Composable
+    fun PlannerScreen(data: List<AttendanceSubject>, onBack: () -> Unit) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("Semester Planner") },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        }
+                    }
+                )
+            }
+        ) { padding ->
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(horizontal = 16.dp),
+                contentPadding = PaddingValues(vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                items(data) { subject ->
+                    val code = subject.subjectCode
+                    if (code == null) return@items
+                    val present = subject.attendedLecture?.toIntOrNull() ?: 0
+                    val heldSoFar = subject.totalWithOutMakeupLectureCount?.toIntOrNull() ?: 0
+
+                    var totalText by remember(code) {
+                        mutableStateOf(semesterTotalsStore.get(code)?.toString() ?: "")
+                    }
+
+                    val semesterTotal = totalText.toIntOrNull()
+                    val result = semesterTotal?.let { computePlanner(present, heldSoFar, it) }
+
+                    Card(modifier = Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.medium) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Text(subject.subjectName ?: code, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                "So far: $present / $heldSoFar (${subject.percentageOfLec ?: "-"}%)",
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            OutlinedTextField(
+                                value = totalText,
+                                onValueChange = { newVal ->
+                                    val filtered = newVal.filter { it.isDigit() }
+                                    totalText = filtered
+                                    filtered.toIntOrNull()?.let { semesterTotalsStore.set(code, it) }
+                                },
+                                label = { Text("Total lectures this semester") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            when {
+                                semesterTotal == null || semesterTotal <= 0 -> {
+                                    Text(
+                                        "Enter total lectures to see your planner.",
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                semesterTotal < heldSoFar -> {
+                                    Text(
+                                        "Total must be at least $heldSoFar (lectures already held).",
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                                result != null -> {
+                                    Divider(modifier = Modifier.padding(vertical = 8.dp))
+                                    Text("Remaining lectures: ${result.remainingLectures}", fontSize = 13.sp)
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        "If you don't miss any more: " +
+                                            String.format(Locale.US, "%.2f", result.projectedIfNoMoreMiss) + "%",
+                                        fontSize = 13.sp
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    if (result.achievable75) {
+                                        Text(
+                                            "You can still miss up to ${result.maxCanMiss} lecture(s) and stay \u226575%",
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF66BB6A)
+                                        )
+                                    } else {
+                                        Text(
+                                            "Even attending every remaining class, you'll end at " +
+                                                String.format(Locale.US, "%.2f", result.projectedIfNoMoreMiss) +
+                                                "% \u2014 below 75%",
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFFEF5350)
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
